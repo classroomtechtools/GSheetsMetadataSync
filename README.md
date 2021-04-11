@@ -1,4 +1,4 @@
-# GSheetsMetadataDoc
+# GSheetsMetadataSync
 
 Keep a google sheet synced with a data source represented by a list of jsons (which all have the property `id`), such as provided by API endpoints. Users can rearrange columns, change name of header, columns or rows — format it in any way they choose – and subsequent updates will stay in sync.
 
@@ -16,7 +16,7 @@ You'll need a list of jsons to pass to the `update` method:
 
 ```js
 const jsons = [{id: 1, values: [0, 1]}, ...];
-doc.update({jsons});
+doc.apply({jsons});
 ```
 
 ## Motivation
