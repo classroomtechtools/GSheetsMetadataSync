@@ -453,18 +453,20 @@ const Import = Object.create(null);
       const mapValue = (v) => {
         // converts a json date into a user-entered version that the spreadsheet can format to date
         // in the spreadsheet's local timezone!
+        if (v===null) return null;
+        if (typeof v === 'number') return v;
         if ( typeof v === 'string' && ['+'].includes(v[0]) ) return `'${v}`;  // phone numbers
-        if (!re.test(v)) return v;
-        try {
-          const date = DateFns.parseISO(v);
-          const {tz} = Dimensions;
-          const formatted = DateFns.format(DateFns.utcToZonedTime(date, tz), 'yyyy-MM-dd HH:mm:ss', {tz});
-          Logger.log({date, formatted})
-          return formatted;
-        } catch (e) {
-          Logger.log(e);
+        if (typeof v === 'string' && !re.test(v)) return v;
+        const {tz} = Dimensions;
+        let date;
+        if (typeof v === 'string') {
+          date = DateFns.parseISO(v);
+        } else {
+          date = v;
         }
-        return v;
+        const zonedTime = DateFns.utcToZonedTime(date, tz);
+        const formatted = DateFns.format(zonedTime, 'yyyy-MM-dd HH:mm:ss', {tz});
+        return formatted;
       }
 
       // keep a map of grid data for ids and columns
