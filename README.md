@@ -58,7 +58,7 @@ Function is defined as thus:
 
 ```js
  /** 
-   * @params {Object} jsons - A list of json
+   * @params {Object[]} jsons - A list of json
    * @params {String} fields - what fields to include in the batchUpdateByDataFilter response 
    * @params {String[]} priorityHeaders - headers to flush left
    * @params {Boolean} isIterative - indicates this is not a wholesale update, so handle jsons differently
