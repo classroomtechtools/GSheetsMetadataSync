@@ -12,10 +12,11 @@ const Import = Object.create(null);
      * returns sheet id by sheetKey
      * if not present, return null
      */
-    constructor (endpoints) {
+    constructor (endpoints, visibility='PROJECT') {
       this.endpoints = endpoints;
       this.countRows = 0;
       this.countColumns = 0;
+      this.visibility = visibility;
     }
 
     /**
@@ -27,7 +28,7 @@ const Import = Object.create(null);
 
       const metadataKey = `ctt_sheetKey_${sheetKey}`;
       const request = this.endpoints.developerMetadata.search();
-      request.bySpreadsheetLoc({metadataKey, visibility: 'PROJECT'});
+      request.bySpreadsheetLoc({metadataKey, visibility: this.visibility});
       const json = check_error(
         request.fetch(), 'looking for sheetKey'
       ).json;
@@ -59,7 +60,7 @@ const Import = Object.create(null);
           location: {
             spreadsheet: true
           },
-          visibility: "PROJECT"
+          visibility: this.visibility
         });
         const addSheetMdJson = check_error(
           addSheetMdReq.fetch(), 'when trying to create new sheet metadata'
@@ -73,10 +74,13 @@ const Import = Object.create(null);
         );
         const ssjson = ssresp.json;
 
-        if (!ssresp.ok) throw new Error(ssjson.error.message);
-        sheetName = ssjson.sheets.filter(
+        const filteredSheet = ssjson.sheets.filter(
           sh => sh.properties.sheetId === sheetId
-        ).pop().properties.title;
+        );
+        if (filteredSheet.length === 0) {
+          throw new Error(`The old sheet with sync key ${sheetKey} must have been deleted. Try a new key?`);
+        }
+        sheetName = filteredSheet.pop().properties.title;
       }
       return {sheetId, sheetName};
     }
@@ -143,7 +147,7 @@ const Import = Object.create(null);
       // sheet location where key = headers and value is the sheet ID
       batch.byLocationType('column', sheetId, {
         metadataKey: header,
-        visibility: 'PROJECT'
+        visibility: this.visibility
       });
     }
 
@@ -151,7 +155,7 @@ const Import = Object.create(null);
       const idString = id.toString();
       //const searchRequest = this.endpoints.developerMetadata.search({id});  // mixin can be id
       // sheet location where key = headers and value is the sheet ID
-      batch.byLocationType('row', sheetId, {metadataKey: idString, visibility: 'PROJECT'});
+      batch.byLocationType('row', sheetId, {metadataKey: idString, visibility: this.visibility});
     }
 
     newColumnMd(batch, sheetId, header, idx) {
@@ -166,7 +170,7 @@ const Import = Object.create(null);
             endIndex: idx + 1
           }
         },
-        visibility: "PROJECT"
+        visibility: this.visibility
       });
     }
 
@@ -182,7 +186,7 @@ const Import = Object.create(null);
             endIndex: idx + 1
           }
         },
-        visibility: "PROJECT"
+        visibility: this.visibility
       });
     }
   }
@@ -194,33 +198,18 @@ const Import = Object.create(null);
      * if metadata by sheetKey not present, create it with that name
      * Responsbile for setting up sheet
      */
-    constructor (id, sheetKey) {
+    constructor (id, sheetKey, visibility='PROJECT') {
       this.id = id;
       this.endpoints = GSheetEndpoints.fromId(id);
-      this.search = new Search(this.endpoints);
+      this.visibility = visibility;
+      this.search = new Search(this.endpoints, this.visibility);
       const {sheetId, sheetName} = this.search.getSheetId(sheetKey);
       this.sheetId = sheetId;
       this.sheetName = sheetName;
     }
 
-    static fromId(id, sheetKey) {
-      return new SheetsMetadataDoc(id, sheetKey);
-    }
-
-    init() {
-
-    }
-
-    query({id}) {
-
-    }
-
-    update({json}) {
-
-    }
-
-    insert({json}) {
-
+    static fromId(id, sheetKey, {visibility="PROJECT"}={}) {
+      return new SheetsMetadataDoc(id, sheetKey, visibility);
     }
 
     getTimeZone () {
@@ -229,7 +218,7 @@ const Import = Object.create(null);
 
     getSpreadsheetMetadata({metadataKey=null, metadataValue=null}) {
       const request = this.endpoints.developerMetadata.search();
-      request.bySpreadsheetLoc({metadataValue, metadataKey, visibility: 'PROJECT'});
+      request.bySpreadsheetLoc({metadataValue, metadataKey, visibility: this.visibility});
       return request.fetch().json.matchedDeveloperMetadata;
     }
 
@@ -242,7 +231,7 @@ const Import = Object.create(null);
         location: {
           spreadsheet: true
         },
-        visibility: "PROJECT"
+        visibility: this.visibility
       });
       return check_error(
         request.fetch(), 'when creating spreadsheet metadata with metadataKey = ' + metadataKey + ' and metadataValue = ' + metadataValue
@@ -261,15 +250,28 @@ const Import = Object.create(null);
     }
 
     /** 
-     * Takes a list of jsons, converts them to rows to see the headers, ensures those headers are present in md
-     *   via batch call
-     * Then goes through each json, and if present builds update request, if not, builds insert request.
-     * Finally, batch calls the requests
+     * @params {Object} jsons - A list of json
+     * @params {String} fields - what to include
+     * @params {String[]} priorityHeaders - flush left
+     * @params {Boolean} isIterative - indicates this is not a wholesale update, so handle jsons differently
      * @returns {Object} - the replies
      */
-    apply({jsons, fields='totalUpdatedCells', priorityHeaders=['id'], rows: providedRows=null}={},
-          {useSetValues=false}={}) 
+    apply({jsons, fields='totalUpdatedCells', priorityHeaders=['id'], isIncremental=false,
+            sortCallback = (a, b) => a.id - b.id})
     {
+      if (jsons.length === 0) {
+        return {totalUpdatedCells: 0, message: 'zero length json array'};
+      }
+
+      if ( jsons.filter(json => json.id == null).length > 0 ) {
+        throw new Error(
+          "All jsons must have id property which must remain stable (i.e. from a serialized database"
+        );
+      }
+
+      // sort them by id (or however it is passed)
+      jsons.sort( sortCallback );
+
       const {DateFns} = Import;
 
       const ValuesUpdater = this.endpoints.values.batchUpdateByDataFilter({
@@ -319,14 +321,13 @@ const Import = Object.create(null);
         grid[typ].set(k, v);
       };
 
-
-      let rows;
-      if (providedRows) {
-        rows = providedRows;
-      } else {
-        rows = dottie.jsonsToRows(jsons);
+      // don't delete "empty" or null values because we may need to
+      let options = [];
+      if (isIncremental) {
+        options = [false, false];
       }
 
+      const rows = dottie.jsonsToRows(jsons, priorityHeaders, ...options);
       const headers = rows[0];
 
       const Dimensions = this.search.getDimensions(this.sheetId);
@@ -377,37 +378,44 @@ const Import = Object.create(null);
       }
       let newColumnIndex = Math.max(...allColumnIndexes) + 1;
 
-      // go through each one we found in the data
-      for (const data of CheckHeaderBatch.payload.dataFilters) {
-        const metadata = data.developerMetadataLookup;
-        const header = metadata.metadataKey;
-        if (!grid.headers.has(header)) {
-          // no metadata info for this header info yet, let's make it!
+      // we have to go through each one we found in the data
+      // but only necessary if we are going to add headers
+      // isIncremental true means we skip this process
+      if (!isIncremental) {
+        for (const data of CheckHeaderBatch.payload.dataFilters) {
+          const metadata = data.developerMetadataLookup;
+          const header = metadata.metadataKey;
 
-          if (newColumnIndex >= Dimensions.columnCount) {
-            Dimensions.incColumnCount(/* for subsequent Dimenisons.update call */);
-          }
-          this.search.newColumnMd(ColumnRowUpdater, this.sheetId, header, newColumnIndex);
-          storeNewToGrid(metadata, newColumnIndex);   // pass literal ones instead
+          if ( !grid.headers.has(header) ) {
+            // no metadata info for this header info yet, let's make it!
 
-          // add it to the list of things to update, upon creation
-          // but only if we have frozen rows on there
-          const gridRange = grid.headers.get(header);
-          if (Dimensions.frozenRowCount > 0) {
-            gridRange.startRowIndex = 0;
-            gridRange.endRowIndex = 1;
-            gridRange.sheetId = this.sheetId;
-            ValuesUpdater.addGridRange(gridRange, {values: [[header]]});
-          }
+            if (newColumnIndex >= Dimensions.columnCount) {
+              Dimensions.incColumnCount(/* for subsequent Dimenisons.update call */);
+            }
+            this.search.newColumnMd(ColumnRowUpdater, this.sheetId, header, newColumnIndex);
+            storeNewToGrid(metadata, newColumnIndex);   // pass literal ones instead
 
-          // put a request in to move it if it's a priority header
-          if (priorityHeaders.includes(header)) {
-            ShiftUpdater.moveDimension(this.sheetId, gridRange.startColumnIndex, priorityHeaders.indexOf(header));
-          }
+            // add it to the list of things to update, upon creation
+            // but only if we have frozen rows on there
+            const gridRange = grid.headers.get(header);
+            if (Dimensions.frozenRowCount > 0) {
+              gridRange.startRowIndex = 0;
+              gridRange.endRowIndex = 1;
+              gridRange.sheetId = this.sheetId;
+              ValuesUpdater.addGridRange(gridRange, {values: [[header]]});
+            }
 
-          newColumnIndex += 1;
-        } 
-      }
+            // put a request in to move it if it's a priority header
+            if (priorityHeaders.includes(header)) {
+              ShiftUpdater.moveDimension(
+                this.sheetId, gridRange.startColumnIndex, priorityHeaders.indexOf(header)
+              );
+            }
+
+            newColumnIndex += 1;
+          } 
+        }
+      }  // end if !isIterative
 
 
       // determine which IDs are missing
@@ -415,7 +423,7 @@ const Import = Object.create(null);
       if (isEmpty(checkIdsBatchResponsesJson)) {
         allRowIndexes = [0];
       } else {
-        allRowIndexes = checkHeaderBatchResponsesJson.matchedDeveloperMetadata.map(
+        allRowIndexes = checkIdsBatchResponsesJson.matchedDeveloperMetadata.map(
           md => md.developerMetadata.location.dimensionRange.startIndex
         );
       }
@@ -450,17 +458,25 @@ const Import = Object.create(null);
 
       const re = new RegExp(/\d{4}-[01]\d-[0-3]\dT[0-2]\d:[0-5]\d:[0-5]\d\.\d+([+-][0-2]\d:[0-5]\d|Z)/);
 
+      /**
+       * converts a json date into a user-entered version that the spreadsheet can format to date
+       * in the spreadsheet's local timezone!
+       */
       const mapValue = (v) => {
-        // converts a json date into a user-entered version that the spreadsheet can format to date
-        // in the spreadsheet's local timezone!
-        if (v===null) return null;
-        if (typeof v === 'number') return v;
+        if (v == null) return '';   // ensure that any nulls are reverted to blank cells
+        if (typeof v === 'object' && Object.keys(v).length === 0) return '';
+        if (['number', 'boolean'].includes(typeof v)) return v;
+        if (Array.isArray(v) && v.length === 0) return '';  // ensure to blank it for empty arrays
         if ( typeof v === 'string' && ['+'].includes(v[0]) ) return `'${v}`;  // phone numbers
         if (typeof v === 'string' && !re.test(v)) return v;
         const {tz} = Dimensions;
         let date;
         if (typeof v === 'string') {
-          date = DateFns.parseISO(v);
+          try {
+            date = DateFns.parseISO(v);
+          } catch (e) {
+            date = v;
+          }
         } else {
           date = v;
         }
@@ -486,25 +502,17 @@ const Import = Object.create(null);
       }
 
       // ready to write
-      let reply;[]
-      if (useSetValues) {
-        const ssSheet = SpreadsheetApp.openById(this.id).getSheetByName(this.sheetName);
-        ssSheet.getRange(1, 1, rows.length, rows[0].length)
-               .setValues(rows);
-        reply = {totalUpdatedCells: rows.length * rows[0].length};  // TODO: actually count
-      } else {
-        reply = ValuesUpdater.fetch().json;
-      }
+      const reply = check_error(
+        ValuesUpdater.fetch(), 'while updating values'
+      ).json;
 
       if (ShiftUpdater.payload.requests.length > 0) {
-        SpreadsheetApp.flush();
+        SpreadsheetApp.flush();  // wait to make sure updates occur
         const moved = check_error(
           ShiftUpdater.fetch(), 'while moving columns'
         );
       }
       
-      reply.metadataCharactersUsed = characters;
-      reply.metadataCharactersPercentOfQuota = ((characters / 30000) * 100).toFixed(1) + '%';  // 30K limit
       return reply;
     }
 
