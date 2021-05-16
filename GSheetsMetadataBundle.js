@@ -12,7 +12,7 @@ const Import = Object.create(null);
      * returns sheet id by sheetKey
      * if not present, return null
      */
-    constructor (endpoints, visibility='PROJECT') {
+    constructor (endpoints, visibility='DOCUMENT') {
       this.endpoints = endpoints;
       this.countRows = 0;
       this.countColumns = 0;
@@ -24,9 +24,10 @@ const Import = Object.create(null);
      * TODO: Add check if tab already exists when creating
      */
     getSheetId(sheetKey) {
+      if (sheetKey===undefined) throw new TypeError(`sheetKey cannot be undefined`);
       let sheetId, sheetName;
 
-      const metadataKey = `ctt_sheetKey_${sheetKey}`;
+      const metadataKey = sheetKey;  // TODO: interpolation?
       const request = this.endpoints.developerMetadata.search();
       request.bySpreadsheetLoc({metadataKey, visibility: this.visibility});
       const json = check_error(
@@ -250,7 +251,7 @@ const Import = Object.create(null);
     }
 
     /** 
-     * @params {Object} jsons - A list of json
+     * @params {Object[]} jsons - A list of json
      * @params {String} fields - what to include
      * @params {String[]} priorityHeaders - flush left
      * @params {Boolean} isIterative - indicates this is not a wholesale update, so handle jsons differently
@@ -502,9 +503,32 @@ const Import = Object.create(null);
       }
 
       // ready to write
-      const reply = check_error(
-        ValuesUpdater.fetch(), 'while updating values'
-      ).json;
+      const replies = [];
+      if (ValuesUpdater.payload.data.length > 0) {
+        if (ValuesUpdater.payload.data.length > 100000) {
+          const chunk = (arr, size) =>
+            Array.from({ length: Math.ceil(arr.length / size) }, (v, i) =>
+              arr.slice(i * size, i * size + size)
+            );
+          
+          for (const ch of chunk(ValuesUpdater.payload.data, 10000)) {
+            const b = this.endpoints.values.batchUpdateByDataFilter({
+              valueInputOption: "USER_ENTERED"
+            });;
+            b.payload = {...ValuesUpdater.payload};
+            b.payload.data = ch;
+            replies.push(check_error(
+              b.fetch(), 'while batch updating values'
+            ).json);
+          }
+        } else {
+          replies.push(check_error(
+            ValuesUpdater.fetch(), 'while updating values'
+          ).json);
+        }
+
+
+      }
 
       if (ShiftUpdater.payload.requests.length > 0) {
         SpreadsheetApp.flush();  // wait to make sure updates occur
@@ -513,7 +537,15 @@ const Import = Object.create(null);
         );
       }
       
-      return reply;
+      // return just one object which calculates the numbers
+      return replies.reduce(function (acc, reply) {
+        for (const [key, value] of Object.entries(reply)) {
+          if (typeof value === 'number') {
+            acc[key] = (acc[key] || 0) + value;
+          }
+        }
+        return acc;
+      }, {});
     }
 
   }
