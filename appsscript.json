@@ -1,5 +1,4 @@
 {
-  "timeZone": "America/New_York",
   "exceptionLogging": "STACKDRIVER",
   "runtimeVersion": "V8",
   "dependencies": {
@@ -14,12 +13,13 @@
       {
         "userSymbol": "dottie",
         "libraryId": "1k_EGzQ6FvfMlyifgPxcBqgPe3TQSWLFGF9VrDWAGU1wfOFnOFsRbI8V_",
-        "version": "11"
+        "version": "13"
       },
       {
         "userSymbol": "GSheetEndpoints",
         "libraryId": "1eKqiWDenWj5yAVBd6WXJkEqFOyFDji7Iean7u4pVJWTWhKUmRIeNGsqN",
-        "version": "3"
+        "version": "3",
+        "developmentMode": false
       }
     ]
   }
